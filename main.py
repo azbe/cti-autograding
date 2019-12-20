@@ -43,12 +43,19 @@ class Dataset:
 class Model:
     def __init__(self, input_shape, num_answers, num_type_answers, dropout=False):
         self.inputs = keras.layers.Input(input_shape)
-        net = keras.layers.Conv2D(filters=64, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(self.inputs)
+        net = keras.layers.BatchNormalization()(self.inputs)
+        net = keras.layers.Conv2D(filters=32, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
+        net = keras.layers.Conv2D(filters=32, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
         net = keras.layers.Conv2D(filters=64, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
+        net = keras.layers.Conv2D(filters=64, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
         net = keras.layers.Conv2D(filters=128, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
-        net = keras.layers.Conv2D(filters=128, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
         net = keras.layers.Conv2D(filters=256, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
-        net = keras.layers.Conv2D(filters=256, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu")(net)
+        net = keras.layers.BatchNormalization()(net)
         net = keras.layers.GlobalAveragePooling2D()(net)
         if dropout:
             net = keras.layers.Dropout(rate=0.5)(net)
@@ -58,13 +65,20 @@ class Model:
         self.model.compile(optimizer="rmsprop", loss="categorical_crossentropy", metrics=["accuracy"])
     
     def train(self, dataset):
-        self.model.fit(x=dataset.images, y=dataset.answers, epochs=10, verbose=1, validation_split=0.2, shuffle=True)
+        try:
+            self.model.fit(x=dataset.images, y=dataset.answers, epochs=10000, verbose=1, validation_split=0.25, shuffle=True)
+        except KeyboardInterrupt:
+            pass
+
+    def save(self, path):
+        self.model.save(path)
 
 
 def main():
     dataset = Dataset("./data", image_size=(566, 400))
-    model = Model(input_shape=(400, 566, 3), num_answers=30, num_type_answers=4, dropout=False)
+    model = Model(input_shape=(400, 566, 3), num_answers=30, num_type_answers=4, dropout=True)
     model.train(dataset)
+    model.save("./model.h5")
 
 
 if __name__ == "__main__":
