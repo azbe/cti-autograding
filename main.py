@@ -19,6 +19,9 @@ ANSWERS_START_LEFT = (854, 983)
 ANSWERS_START_RIGHT = (866, 3168)
 ANSWERS_INCREASE = (114.5, 140)
 ANSWERS_CELL_SIZE = (60, 80)
+ANSWERS_NO_START_TOP = (250, 3600)
+ANSWERS_NO_START_BOT = (440, 3600)
+ANSWERS_NO_CELL_SIZE = (80, 80)
 ANSWERS_CHOICES = ("A", "B", "C", "D")
 
 NUM_ANSWERS = 15
@@ -27,16 +30,19 @@ NUM_CHOICES = 4
 
 
 class Subject:
-    UNKNOWN = 0
-    INFORMATICA = 1
-    FIZICA = 2
+    UNKNOWN = "UNKNOWN"
+    INFORMATICA = "INFORMATICA"
+    FIZICA = "FIZICA"
+
+    def __str__(self):
+        return self.value
 
 
 class Answers:
     def __init__(self):
         self._answers = [None for _ in range(NUM_VARIANTS * NUM_ANSWERS)]
         self.subject = Subject.UNKNOWN
-        self.subject_no = None
+        self.subject_nr = None
     
     def __getitem__(self, idx):
         return self._answers[idx]
@@ -45,7 +51,9 @@ class Answers:
         self._answers[idx] = value
     
     def __repr__(self):
-        return "\n".join(["{}: {}".format(idx + 1, answer) for idx, answer in enumerate(self._answers)])
+        return "{} nr. {}\n{}".format(
+            str(self.subject), self.subject_nr,
+            "\n".join(["{}: {}".format(idx + 1, answer) for idx, answer in enumerate(self._answers)]))
 
 
 def load_image_cv2(path, greyscale=False, noiseless=False):
@@ -69,8 +77,8 @@ def remove_noise(image, size=3):
     return scipy.ndimage.median_filter(image, size=size)
 
 
-def normalize(image, template):
-    detector = cv2.xfeatures2d.SIFT_create(SIFT_FEATURES)
+def normalize(image, template, sift_features=SIFT_FEATURES):
+    detector = cv2.xfeatures2d.SIFT_create(sift_features)
     img_kp, img_des = detector.detectAndCompute(image, None)
     tmp_kp, tmp_des = detector.detectAndCompute(template, None)
     
@@ -99,6 +107,18 @@ def visualize_answers(image, answers):
             best = ANSWERS_CHOICES.index(answers[k * NUM_ANSWERS + i])
             for j, (y, x) in enumerate(pts):
                 cv2.rectangle(image_o, (x, y), (x + dx, y + dy), (0, 255, 0,) if j == best else (255, 0, 0), 1)
+    if answers.subject == Subject.INFORMATICA:
+        sy, sx = ANSWERS_NO_START_TOP
+        dy, dx = ANSWERS_NO_CELL_SIZE
+        cv2.rectangle(image_o, (int(sx - dx/2), int(sy - dy/2)), (int(sx + dx/2), int(sy + dy/2)), (0, 255, 0))
+        plt.title("INFORMATICA nr. {}".format(answers.subject_nr))
+    elif answers.subject == Subject.FIZICA:
+        sy, sx = ANSWERS_NO_START_BOT
+        dy, dx = ANSWERS_NO_CELL_SIZE
+        cv2.rectangle(image_o, (int(sx - dx/2), int(sy - dy/2)), (int(sx + dx/2), int(sy + dy/2)), (0, 255, 0))
+        plt.title("FIZICA nr. {}".format(answers.subject_nr))
+    else:
+        plt.title("Unknown subject")
     plt.imshow(image_o)
     plt.show()
 
@@ -110,8 +130,9 @@ def crop_answers(image):
     return image
 
 
-def get_answers(image):
+def get_answers(image, nr_templates):
     answers = Answers()
+
     iy, ix = ANSWERS_INCREASE
     dy, dx = ANSWERS_CELL_SIZE
     for k, (sy, sx) in enumerate([ANSWERS_START_LEFT, ANSWERS_START_RIGHT]):
@@ -121,23 +142,42 @@ def get_answers(image):
             best = np.argmin(sums)
             answers[k * NUM_ANSWERS + i] = ANSWERS_CHOICES[best]
 
+    dy, dx = ANSWERS_NO_CELL_SIZE
+    pts = [(int(sy - dy/2), int(sx - dx/2)) for sy, sx in [ANSWERS_NO_START_TOP, ANSWERS_NO_START_BOT]]
+    sums = [np.sum(image[y:y+dy, x:x+dx]) for (y, x) in pts]
+    best = np.argmin(sums)
+    if best == 0:
+        answers.subject = Subject.INFORMATICA
+        sy, sx = ANSWERS_NO_START_TOP
+    else:
+        answers.subject = Subject.FIZICA
+        sy, sx = ANSWERS_NO_START_BOT
+
+    answer = image[sy-dy//2:sy+dy//2, sx-dx//2:sx+dx//2]
+    ans = [normalize(answer, nr_template) for nr_template in nr_templates]
+    ans = [np.sum(a) for a in ans]
+    ans = np.argmax(ans)
+    answers.subject_nr = ans
+
     return answers
 
 
-def main(images, template):
-    template = load_image_cv2(template, True, True)
+def main(images, template, nr_templates):
+    template = load_image_cv2(template, greyscale=True, noiseless=True)
+    nr_templates = [load_image_cv2(nr_template, greyscale=True, noiseless=True) for nr_template in nr_templates]
     images = sorted(images)
     for idx, path in enumerate(tqdm.tqdm(images)):
-        image = load_image_cv2(path, True, True)
+        image = load_image_cv2(path, greyscale=True, noiseless=True)
         image = normalize(image, template)
         image = crop_answers(image)
-        answers = get_answers(image)
+        answers = get_answers(image, nr_templates)
         visualize_answers(image, answers)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("images", type=str, nargs="+", help="Paths to input images to grade.")
-    parser.add_argument("--template", type=str, help="Path to image to use as template for matching.")
+    parser.add_argument("--template", type=str, default="./template.jpg", help="Path to image templates to use for normalizing perspective.")
+    parser.add_argument("--nr_templates", nargs=4, type=str, default=["./template_1.jpg", "./template_2.jpg", "./template_3.jpg", "./template_4.jpg"], help="Path to image templates to use for matching numbers.")
     args, _ = parser.parse_known_args()
     main(**vars(args))
