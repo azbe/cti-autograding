@@ -11,6 +11,8 @@ import matplotlib.patches as patches
 import scipy.ndimage
 import tqdm
 
+import digit_recognizer
+
 
 SIFT_FEATURES = 2000
 
@@ -19,9 +21,11 @@ ANSWERS_START_LEFT = (854, 983)
 ANSWERS_START_RIGHT = (866, 3168)
 ANSWERS_INCREASE = (114.5, 140)
 ANSWERS_CELL_SIZE = (60, 80)
-ANSWERS_NO_START_TOP = (250, 3600)
-ANSWERS_NO_START_BOT = (440, 3600)
-ANSWERS_NO_CELL_SIZE = (80, 80)
+ANSWERS_NO_START_TOP = (265, 3595)
+ANSWERS_NO_START_BOT = (455, 3600)
+ANSWERS_NO_CELL_SIZE = (160, 160)
+ANSWERS_NO_MASK_THRESH = 200
+ANSWERS_NO_MASK_THRESH_1 = 0.5
 ANSWERS_CHOICES = ("A", "B", "C", "D")
 
 NUM_ANSWERS = 15
@@ -56,8 +60,10 @@ class Answers:
             "\n".join(["{}: {}".format(idx + 1, answer) for idx, answer in enumerate(self._answers)]))
 
 
-def load_image_cv2(path, greyscale=False, noiseless=False):
+def load_image_cv2(path, greyscale=False, noiseless=False, resize=None):
     image = cv2.imread(path, cv2.IMREAD_COLOR)
+    if resize:
+        image = cv2.resize(image, resize)
     if greyscale:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if noiseless:
@@ -69,12 +75,23 @@ def random_string(length=32):
     return "".join([str(random.randint(0, 9)) for _ in range(length)])
 
 
-def crop(image, crop):
-    return image[crop[0]:crop[2], crop[1]:crop[3]]
-
-
 def remove_noise(image, size=3):
     return scipy.ndimage.median_filter(image, size=size)
+
+
+def get_border(answer):
+    def border_1d(arr):
+        idx = 0
+        while arr[idx]: idx += 1
+        while not arr[idx]: idx += 1
+        start = idx
+        while arr[idx]: idx += 1
+        end = idx
+        return (start, end)
+    mask = answer <= ANSWERS_NO_MASK_THRESH
+    mask_h, mask_v = np.mean(mask, axis=0), np.mean(mask, axis=1)
+    mask_h, mask_v = (mask_h <= ANSWERS_NO_MASK_THRESH_1), (mask_v <= ANSWERS_NO_MASK_THRESH_1)
+    return border_1d(mask_v), border_1d(mask_h)
 
 
 def normalize(image, template, sift_features=SIFT_FEATURES):
@@ -125,12 +142,12 @@ def visualize_answers(image, answers):
 
 def crop_answers(image):
     height, width = image.shape
-    cy, cx = ANSWERS_CROP
-    image = crop(image, (int(cy * height), 0, int(cx * height), width))
+    cys, cye = ANSWERS_CROP
+    image = image[int(cys * height):int(cye * height), :]
     return image
 
 
-def get_answers(image, nr_templates):
+def get_answers(image, model):
     answers = Answers()
 
     iy, ix = ANSWERS_INCREASE
@@ -143,34 +160,31 @@ def get_answers(image, nr_templates):
             answers[k * NUM_ANSWERS + i] = ANSWERS_CHOICES[best]
 
     dy, dx = ANSWERS_NO_CELL_SIZE
-    pts = [(int(sy - dy/2), int(sx - dx/2)) for sy, sx in [ANSWERS_NO_START_TOP, ANSWERS_NO_START_BOT]]
-    sums = [np.sum(image[y:y+dy, x:x+dx]) for (y, x) in pts]
+    crops = [image[sy-dy//2:sy+dy//2, sx-dx//2:sx+dx//2] for (sy, sx) in [ANSWERS_NO_START_TOP, ANSWERS_NO_START_BOT]]
+    borders = [get_border(crop) for crop in crops]
+    crops = [crop[sy:ey, sx:ex] for crop, ((sy, ey), (sx, ex)) in zip(crops, borders)]
+    sums = [np.sum(crop) for crop in crops]
     best = np.argmin(sums)
-    if best == 0:
-        answers.subject = Subject.INFORMATICA
-        sy, sx = ANSWERS_NO_START_TOP
-    else:
-        answers.subject = Subject.FIZICA
-        sy, sx = ANSWERS_NO_START_BOT
+    answers.subject = Subject.INFORMATICA if best == 0 else Subject.FIZICA
 
-    answer = image[sy-dy//2:sy+dy//2, sx-dx//2:sx+dx//2]
-    ans = [normalize(answer, nr_template) for nr_template in nr_templates]
-    ans = [np.sum(a) for a in ans]
-    ans = np.argmax(ans)
-    answers.subject_nr = ans
+    fig, ax = plt.subplots(1, 2)
+    ax[0].imshow(crops[0], cmap="Greys_r")
+    ax[1].imshow(crops[1], cmap="Greys_r")
+    fig.suptitle(answers.subject)
+    plt.show()
 
     return answers
 
 
-def main(images, template, nr_templates):
+def main(images, template, model_path):
     template = load_image_cv2(template, greyscale=True, noiseless=True)
-    nr_templates = [load_image_cv2(nr_template, greyscale=True, noiseless=True) for nr_template in nr_templates]
+    model = digit_recognizer.load_model(model_path)
     images = sorted(images)
     for idx, path in enumerate(tqdm.tqdm(images)):
         image = load_image_cv2(path, greyscale=True, noiseless=True)
         image = normalize(image, template)
         image = crop_answers(image)
-        answers = get_answers(image, nr_templates)
+        answers = get_answers(image, model)
         visualize_answers(image, answers)
 
 
@@ -178,6 +192,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("images", type=str, nargs="+", help="Paths to input images to grade.")
     parser.add_argument("--template", type=str, default="./template.jpg", help="Path to image templates to use for normalizing perspective.")
-    parser.add_argument("--nr_templates", nargs=4, type=str, default=["./template_1.jpg", "./template_2.jpg", "./template_3.jpg", "./template_4.jpg"], help="Path to image templates to use for matching numbers.")
+    parser.add_argument("--model_path", type=str, default="./digit_recognizer.h5", help="Path to traineds digit recognizer")
     args, _ = parser.parse_known_args()
     main(**vars(args))

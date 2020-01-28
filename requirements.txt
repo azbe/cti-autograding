@@ -1,0 +1,8 @@
+numpy
+matplotlib
+scipy
+tqdm
+tensorflow-gpu==1.13.1
+keras
+opencv-python==3.4.2.16
+opencv-contrib-python==3.4.2.16
