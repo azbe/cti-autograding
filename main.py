@@ -206,7 +206,6 @@ def get_answers(image, model, verbose):
     answers.subject_nr = np.argmax(preds) + 1
 
     if verbose: plt.imshow(crops[best], cmap="Greys_r"); plt.show()
-    # cv2.imwrite(os.path.join("output", str(answers.subject_nr - 1), random_string() + ".png"), crops[best])
 
     return answers
 
