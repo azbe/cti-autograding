@@ -20,17 +20,15 @@ import digit_recognizer
 SIFT_FEATURES = 2000
 
 ANSWERS_CROP = (0.425, 0.875)
-
-ANSWERS_START_LEFT = (490, 568)
-ANSWERS_START_RIGHT = (678, 568)
+ANSWERS_START_LEFT = (695, 985)
+ANSWERS_START_RIGHT = (705, 3175)
 ANSWERS_INCREASE = (114.5, 140)
 ANSWERS_CELL_SIZE = (60, 80)
-
-SUBJECT_TOP = ((0, 775), (165, -1))
-SUBJECT_BOT = ((165, 775), (-1, -1))
-SUBJECT_THRESH = 60
-SUBJECT_THRESH_1 = 0.5
-
+ANSWERS_NO_START_TOP = (100, 3615)
+ANSWERS_NO_START_BOT = (300, 3615)
+ANSWERS_NO_CELL_SIZE = (200, 200)
+ANSWERS_NO_MASK_THRESH = 40
+ANSWERS_NO_MASK_THRESH_1 = 0.5
 ANSWERS_CHOICES = ("A", "B", "C", "D")
 
 BAREM_INFORMATICA_STR = "Informatica_varianta{}.txt"
@@ -111,17 +109,6 @@ def remove_noise(image, size=3):
     return scipy.ndimage.median_filter(image, size=size)
 
 
-def plot(*images):
-    if len(images) == 1:
-        plt.imshow(images[0], cmap="Greys_r")
-        plt.show()
-        return
-    fig, ax = plt.subplots(1, len(images))
-    for idx, image in enumerate(images):
-        ax[idx].imshow(image, cmap="Greys_r")
-    plt.show()
-
-
 def get_border(answer, verbose):
     def border_1d(arr):
         idx = 0
@@ -131,10 +118,10 @@ def get_border(answer, verbose):
         while idx < arr.size and arr[idx]: idx += 1
         end = idx
         return (start, end)
-    mask = answer <= SUBJECT_THRESH
+    mask = answer <= ANSWERS_NO_MASK_THRESH
     if verbose: plt.imshow(answer, cmap="Greys_r"); plt.imshow(mask, alpha=0.3); plt.show()
     mask_h, mask_v = np.mean(mask, axis=0), np.mean(mask, axis=1)
-    mask_h, mask_v = (mask_h <= SUBJECT_THRESH_1), (mask_v <= SUBJECT_THRESH_1)
+    mask_h, mask_v = (mask_h <= ANSWERS_NO_MASK_THRESH_1), (mask_v <= ANSWERS_NO_MASK_THRESH_1)
     (sy, ey), (sx, ex) = border_1d(mask_v), border_1d(mask_h)
     if (ex - sx) == 0 or (ey - sy) / (ex - sx) < 0.5 or (ey - sy) / (ex - sx) > 1.5:
         raise ValueError("Crop aspect ratio too small or too big.")
@@ -160,12 +147,6 @@ def normalize(image, template, sift_features=SIFT_FEATURES):
 
     return img
 
-def crop_answers(image):
-    height, width = image.shape
-    cys, cye = ANSWERS_CROP
-    image = image[int(cys * height):int(cye * height), :]
-    return image
-
 
 def visualize_answers(image, answers):
     iy, ix = ANSWERS_INCREASE
@@ -176,37 +157,45 @@ def visualize_answers(image, answers):
             pts = [(int(sy + iy * i - dy/2), int(sx + ix * j - dx/2)) for j in range(NUM_CHOICES)]
             best = ANSWERS_CHOICES.index(answers[k * NUM_ANSWERS + i])
             for j, (y, x) in enumerate(pts):
-                cv2.rectangle(image_o, (x, y), (x + dx, y + dy), (0, 255, 0,) if j == best else (255, 0, 0), 1)
+                cv2.rectangle(image_o, (x, y), (x + dx, y + dy), (0, 255, 0,) if j == best else (255, 0, 0), 3)
     if answers.subject == Subject.INFORMATICA:
-        cv2.rectangle(image_o, SUBJECT_TOP[0], SUBJECT_TOP[1], (0, 255, 0))
+        sy, sx = ANSWERS_NO_START_TOP
+        dy, dx = ANSWERS_NO_CELL_SIZE
+        cv2.rectangle(image_o, (int(sx - dx/2), int(sy - dy/2)), (int(sx + dx/2), int(sy + dy/2)), (0, 255, 0), 3)
         plt.title("INFORMATICA nr. {}".format(answers.subject_nr))
     elif answers.subject == Subject.FIZICA:
-        cv2.rectangle(image_o, SUBJECT_BOT[0], SUBJECT_BOT[1], (0, 255, 0))
+        sy, sx = ANSWERS_NO_START_BOT
+        dy, dx = ANSWERS_NO_CELL_SIZE
+        cv2.rectangle(image_o, (int(sx - dx/2), int(sy - dy/2)), (int(sx + dx/2), int(sy + dy/2)), (0, 255, 0), 3)
         plt.title("FIZICA nr. {}".format(answers.subject_nr))
     else:
         plt.title("Unknown subject")
-    plot(image_o)
+    plt.imshow(image_o)
+    plt.show()
 
 
-def get_answers(rows, subject, model, verbose):
+def crop_answers(image, template):
+    h, w = image.shape
+    res = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    y, _ = np.where(res == res.max())
+    sy = y[0]
+    return image[sy:, :]
+
+
+def get_answers(image, model, verbose):
     answers = Answers()
 
-    dy, dx = ANSWERS_CELL_SIZE
     iy, ix = ANSWERS_INCREASE
+    dy, dx = ANSWERS_CELL_SIZE
     for k, (sy, sx) in enumerate([ANSWERS_START_LEFT, ANSWERS_START_RIGHT]):
-        image_o = copy.deepcopy(rows[k])
         for i in range(NUM_ANSWERS):
             pts = [(int(sy + iy * i - dy/2), int(sx + ix * j - dx/2)) for j in range(NUM_CHOICES)]
-            crops = [rows[k][y:y+dy, x:x+dx] for (y, x) in pts]
-            sums = [np.sum(crop) for crop in crops]
+            sums = [np.sum(image[y:y+dy, x:x+dx]) for (y, x) in pts]
             best = np.argmin(sums)
             answers[k * NUM_ANSWERS + i] = ANSWERS_CHOICES[best]
-            for (y, x) in pts:
-                cv2.rectangle(image_o, (x, y), (x+dx, y+dy), (0, 255, 0))
-        if verbose: plot(image_o)
 
-    crops = [subject[sy:ey, sx:ex] for ((sy, sx), (ey, ex)) in [SUBJECT_TOP, SUBJECT_BOT]]
-    if verbose: plot(*crops)
+    dy, dx = ANSWERS_NO_CELL_SIZE
+    crops = [image[sy-dy//2:sy+dy//2, sx-dx//2:sx+dx//2] for (sy, sx) in [ANSWERS_NO_START_TOP, ANSWERS_NO_START_BOT]]
     borders = [get_border(crop, verbose) for crop in crops]
     crops = [crop[sy:ey, sx:ex] for crop, ((sy, ey), (sx, ex)) in zip(crops, borders)]
     sums = [np.sum(crop) for crop in crops]
@@ -220,7 +209,7 @@ def get_answers(rows, subject, model, verbose):
     preds = model.predict(best_crop)
     answers.subject_nr = np.argmax(preds) + 1
 
-    if verbose: plot(crops[best])
+    if verbose: plt.imshow(crops[best], cmap="Greys_r"); plt.show()
 
     return answers
 
@@ -237,34 +226,27 @@ def compare_answers(answers, groundtruth):
     return answers == gt
 
 
-def main(images, barem, groundtruth, template, model_path, verbose):
+def main(images, groundtruths, barem, template, model_path, verbose):
     template = load_image_cv2(template, greyscale=True, noiseless=True)
-    templates = [
-        load_image_cv2("templates/template_matematica.png", greyscale=True, noiseless=True),
-        load_image_cv2("templates/template_other.png", greyscale=True, noiseless=True),
-        load_image_cv2("templates/template_subject.png", greyscale=True, noiseless=True),
-    ]
+    template_title = load_image_cv2("template_title.jpg", greyscale=True, noiseless=True)
     model = digit_recognizer.load_model(model_path)
-    images = sorted(images)
     for idx, path in enumerate(images):
         try:
             t0 = time.time()
             image = load_image_cv2(path, greyscale=True, noiseless=True)
             image = normalize(image, template)
-            image = crop_answers(image)
-            if verbose: plot(image)
-            rows = [normalize(image, templates[0]), normalize(image, templates[1])]
-            subject = normalize(image, templates[2])
-            if verbose: plot(*rows, subject)
-            answers = get_answers(rows, subject, model, verbose)
+            cropped = crop_answers(image, template_title)
+            if verbose: plt.imshow(cropped, cmap="Greys_r"); plt.show()
+            answers = get_answers(cropped, model, verbose)
             result = get_result(answers, barem)
             t1 = time.time()
             result_correct = ""
-            if groundtruth:
-                comp = compare_answers(answers, os.path.join(groundtruth, "image_{}.txt".format(re.findall(r"\d+", os.path.basename(path))[0])))
-                result_correct = RESULT_CORRECT if comp else RESULT_WRONG
+            if groundtruths:
+                result_correct = RESULT_CORRECT if compare_answers(answers, groundtruths[idx]) else \
+                                 RESULT_WRONG
             print("[{}/{}] path: \"{}\"\tscore: {} ({:.2f}/10)\ttime: {:.2f}s\t{}".format(
-                  idx+1, len(images), path, result, result * 3 / 10 + 1.0, t1 - t0, result_correct))
+                idx+1, len(images), path, result, result * 3 / 10 + 1.0, t1 - t0, result_correct))
+            if verbose: visualize_answers(cropped, answers)
         except Exception as ex:
             print("[{}/{}] Error for file \"{}\"\n".format(idx+1, len(images), path), traceback.format_exc())
 
@@ -273,8 +255,8 @@ if __name__ == "__main__":
     np.set_printoptions(suppress=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("images", type=str, nargs="+", help="Paths to input images to grade.")
+    parser.add_argument("--groundtruths", type=str, nargs="+", help="Path to groundtruth files.")
     parser.add_argument("--barem", type=str, default="./data/barem", help="Path to directory of files containing the correct answers.")
-    parser.add_argument("--groundtruth", type=str, help="Path to directory containing groundtruth files.")
     parser.add_argument("--template", type=str, default="./template.jpg", help="Path to image templates to use for normalizing perspective.")
     parser.add_argument("--model_path", type=str, default="./digit_recognizer.h5", help="Path to trained digit recognizer")
     parser.add_argument("--verbose", action="store_true")
