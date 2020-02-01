@@ -27,9 +27,10 @@ ANSWERS_CELL_SIZE = (60, 80)
 ANSWERS_NO_START_TOP = (100, 3615)
 ANSWERS_NO_START_BOT = (300, 3615)
 ANSWERS_NO_CELL_SIZE = (200, 200)
-ANSWERS_NO_MASK_THRESH = 40
-ANSWERS_NO_MASK_THRESH_1 = 0.5
 ANSWERS_CHOICES = ("A", "B", "C", "D")
+
+SUBJECT_THRESH = (10, 101, 5)
+SUBJECT_THRESH_1 = (0.1, 0.91, 0.05)
 
 BAREM_INFORMATICA_STR = "Informatica_varianta{}.txt"
 BAREM_FIZICA_STR = "Fizica_varianta{}.txt"
@@ -101,6 +102,11 @@ def load_answer_file(path):
     return answers
 
 
+def plot(image):
+    plt.imshow(image, cmap="Greys_r")
+    plt.show()
+
+
 def random_string(length=32):
     return "".join([str(random.randint(0, 9)) for _ in range(length)])
 
@@ -118,14 +124,16 @@ def get_border(answer, verbose):
         while idx < arr.size and arr[idx]: idx += 1
         end = idx
         return (start, end)
-    mask = answer <= ANSWERS_NO_MASK_THRESH
-    if verbose: plt.imshow(answer, cmap="Greys_r"); plt.imshow(mask, alpha=0.3); plt.show()
-    mask_h, mask_v = np.mean(mask, axis=0), np.mean(mask, axis=1)
-    mask_h, mask_v = (mask_h <= ANSWERS_NO_MASK_THRESH_1), (mask_v <= ANSWERS_NO_MASK_THRESH_1)
-    (sy, ey), (sx, ex) = border_1d(mask_v), border_1d(mask_h)
-    if (ex - sx) == 0 or (ey - sy) / (ex - sx) < 0.5 or (ey - sy) / (ex - sx) > 1.5:
-        raise ValueError("Crop aspect ratio too small or too big.")
-    return (sy, ey), (sx, ex)
+    for thresh in np.arange(*SUBJECT_THRESH):
+        mask = answer <= thresh
+        if verbose: plt.imshow(answer, cmap="Greys_r"); plt.imshow(mask, alpha=0.3); plt.show()
+        for thresh_1 in np.arange(*SUBJECT_THRESH_1):
+            mask_h, mask_v = np.mean(mask, axis=0), np.mean(mask, axis=1)
+            mask_h, mask_v = (mask_h <= thresh_1), (mask_v <= thresh_1)
+            (sy, ey), (sx, ex) = border_1d(mask_v), border_1d(mask_h)
+            if (ex - sx) != 0 and (ey - sy) / (ex - sx) >= 0.85 and (ey - sy) / (ex - sx) <= 1.15 and (ey - sy) * (ex - sx) >= 8000:
+                return (sy, ey), (sx, ex)
+    raise ValueError("Could not crop subject number.")
 
 
 def normalize(image, template, sift_features=SIFT_FEATURES):
@@ -170,13 +178,13 @@ def visualize_answers(image, answers):
         plt.title("FIZICA nr. {}".format(answers.subject_nr))
     else:
         plt.title("Unknown subject")
-    plt.imshow(image_o)
-    plt.show()
+    plot(image_o)
 
 
 def crop_answers(image, template):
     h, w = image.shape
     res = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    res = res[:, w//2:]
     y, _ = np.where(res == res.max())
     sy = y[0]
     return image[sy:, :]
@@ -209,7 +217,7 @@ def get_answers(image, model, verbose):
     preds = model.predict(best_crop)
     answers.subject_nr = np.argmax(preds) + 1
 
-    if verbose: plt.imshow(crops[best], cmap="Greys_r"); plt.show()
+    if verbose: plot(crops[best])
 
     return answers
 
@@ -235,8 +243,9 @@ def main(images, groundtruths, barem, template, model_path, verbose):
             t0 = time.time()
             image = load_image_cv2(path, greyscale=True, noiseless=True)
             image = normalize(image, template)
+            if verbose: plot(image)
             cropped = crop_answers(image, template_title)
-            if verbose: plt.imshow(cropped, cmap="Greys_r"); plt.show()
+            if verbose: plot(cropped)
             answers = get_answers(cropped, model, verbose)
             result = get_result(answers, barem)
             t1 = time.time()
