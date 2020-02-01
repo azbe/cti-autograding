@@ -1,5 +1,6 @@
 import argparse
 import copy
+import multiprocessing
 import os
 import pdb
 import random
@@ -16,10 +17,10 @@ import tqdm
 
 import digit_recognizer
 
-
 SIFT_FEATURES = 2000
 
-ANSWERS_CROP = (0.425, 0.875)
+ANSWERS_CROP_THRESH = 0.8
+ANSWERS_CROP_CUT_X = (2675, 1450)
 ANSWERS_START_LEFT = (695, 985)
 ANSWERS_START_RIGHT = (705, 3175)
 ANSWERS_INCREASE = (114.5, 140)
@@ -181,13 +182,45 @@ def visualize_answers(image, answers):
     plot(image_o)
 
 
-def crop_answers(image, template):
+def crop_answers(image, template, threshold):
     h, w = image.shape
     res = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
     res = res[:, w//2:]
-    y, _ = np.where(res == res.max())
-    sy = y[0]
-    return image[sy:, :]
+    if res.max() < threshold:
+        raise ValueError
+    y, x = np.where(res == res.max())
+    y, x = y[0], x[0]
+    x += w // 2
+    dx1, dx2 = ANSWERS_CROP_CUT_X
+    return image[y:, max(0, x - dx1):min(w, x + dx2)]
+
+
+def scale_rotate(image, template, scale, angle):
+    img = cv2.resize(image, (int(image.shape[0] * scale), int(image.shape[1] * scale)))
+    h, w = img.shape
+    cy, cx = h // 2, w // 2
+    img = cv2.warpAffine(img, cv2.getRotationMatrix2D((cx, cy), angle, 1.0), (w, h), flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255))
+    res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
+    y, x = np.where(res == res.max())
+    y, x = y[0], x[0]
+    print(scale, angle, res.max())
+    return (res.max(), (y, x))
+
+
+def find_scale_rotation(image, template, verbose):
+    height, width = image.shape
+    pool = multiprocessing.Pool(NUM_THREADS)
+    results = [pool.apply_async(scale_rotate, [image, template, scale, angle]) 
+               for angle in np.arange(-70, 71, 5) 
+               for scale in np.arange(1.4, 2.3, 0.1)]
+    while not all([result.ready() for result in results]): 
+        pass
+    results = [result.get() for result in results]
+    pdb.set_trace()
+
+    h, w = image.shape
+    image = img[y:, :]
+    return image
 
 
 def get_answers(image, model, verbose):
@@ -234,17 +267,20 @@ def compare_answers(answers, groundtruth):
     return answers == gt
 
 
-def main(images, groundtruths, barem, template, model_path, verbose):
+def main(images, groundtruths, barem, template, template_title, model_path, verbose):
     template = load_image_cv2(template, greyscale=True, noiseless=True)
-    template_title = load_image_cv2("template_title.jpg", greyscale=True, noiseless=True)
+    template_title = load_image_cv2(template_title, greyscale=True, noiseless=True)
     model = digit_recognizer.load_model(model_path)
     for idx, path in enumerate(images):
         try:
             t0 = time.time()
             image = load_image_cv2(path, greyscale=True, noiseless=True)
-            image = normalize(image, template)
-            if verbose: plot(image)
-            cropped = crop_answers(image, template_title)
+            try:
+                cropped = crop_answers(image, template_title, ANSWERS_CROP_THRESH)
+            except ValueError:
+                image = normalize(image, template)
+                if verbose: plot(image)
+                cropped = crop_answers(image, template_title, 0.0)
             if verbose: plot(cropped)
             answers = get_answers(cropped, model, verbose)
             result = get_result(answers, barem)
@@ -266,7 +302,8 @@ if __name__ == "__main__":
     parser.add_argument("images", type=str, nargs="+", help="Paths to input images to grade.")
     parser.add_argument("--groundtruths", type=str, nargs="+", help="Path to groundtruth files.")
     parser.add_argument("--barem", type=str, default="./data/barem", help="Path to directory of files containing the correct answers.")
-    parser.add_argument("--template", type=str, default="./template.jpg", help="Path to image templates to use for normalizing perspective.")
+    parser.add_argument("--template", type=str, default="./template.jpg", help="Path to template to use for normalizing perspective.")
+    parser.add_argument("--template_title", type=str, default="./template_title.jpg", help="Path to template to use for aligning crop.")
     parser.add_argument("--model_path", type=str, default="./digit_recognizer.h5", help="Path to trained digit recognizer")
     parser.add_argument("--verbose", action="store_true")
     args, _ = parser.parse_known_args()
